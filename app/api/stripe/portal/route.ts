@@ -1,12 +1,13 @@
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createPortalSession } from "@/lib/stripe";
 import { NextResponse } from "next/server";
 
 /**
  * POST /api/stripe/portal
  *
- * Redirects the authenticated user to the Stripe Billing Portal where they
- * can manage their subscription, update payment method, cancel, etc.
+ * Sends the signed-in user to the Stripe Billing Portal to manage or cancel
+ * their subscription. Customer id comes from their `subscriptions` row.
  */
 export async function POST(request: Request) {
   try {
@@ -19,29 +20,36 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { data: profile } = await supabase
-      .from("profiles")
+    const admin = createAdminClient();
+    const { data: sub } = await admin
+      .from("subscriptions")
       .select("stripe_customer_id")
-      .eq("id", user.id)
-      .single();
+      .eq("user_id", user.id)
+      .not("stripe_customer_id", "is", null)
+      .limit(1)
+      .maybeSingle();
 
-    if (!profile?.stripe_customer_id) {
+    if (!sub?.stripe_customer_id) {
       return NextResponse.json(
         { error: "No billing account found. Subscribe first." },
         { status: 404 },
       );
     }
 
-    const origin = request.headers.get("origin") ?? process.env.NEXT_PUBLIC_APP_URL ?? "";
+    const origin =
+      request.headers.get("origin") ?? process.env.NEXT_PUBLIC_APP_URL ?? "";
 
     const portalSession = await createPortalSession({
-      customerId: profile.stripe_customer_id,
-      returnUrl: `${origin}/dashboard`,
+      customerId: sub.stripe_customer_id,
+      returnUrl: `${origin}/account`,
     });
 
     return NextResponse.json({ url: portalSession.url });
   } catch (err) {
     console.error("[stripe/portal]", err);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Could not open billing. Please try again." },
+      { status: 500 },
+    );
   }
 }

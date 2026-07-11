@@ -1,1 +1,36 @@
 @import "tailwindcss";
+
+:root {
+  --background: #faf7f2;
+  --foreground: #2c2a26;
+  --muted: #6f6a61;
+  --card: #ffffff;
+  --border: #ece7de;
+  --accent: #b06a4f;
+  --accent-fg: #ffffff;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-card: var(--card);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --font-sans: ui-serif, Georgia, "Times New Roman", serif;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+.btn-accent {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+.btn-accent:hover {
+  filter: brightness(0.95);
+}
