@@ -21,3 +21,4 @@
 ## Notes
 
 - Database schema migration has been documented alongside planning artifacts (PRD, architecture, sprints).
+- AGENTS.md synced as part of Launchpad memory maintenance
