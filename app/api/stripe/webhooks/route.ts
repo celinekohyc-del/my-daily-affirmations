@@ -45,9 +45,14 @@ export async function POST(request: Request) {
       // ── Payment completed → activate subscription ─────────────────────────
       case "checkout.session.completed": {
         const session = event.data.object as Stripe.Checkout.Session;
-        const userId = session.metadata?.userId ?? null;
+        // Payment Links carry the user in client_reference_id; API-created
+        // sessions carry it in metadata.userId. Accept either.
+        const userId =
+          session.client_reference_id ?? session.metadata?.userId ?? null;
         if (!userId) {
-          console.warn("[stripe/webhooks] completed session missing userId");
+          console.warn(
+            "[stripe/webhooks] completed session missing client_reference_id/userId",
+          );
           break;
         }
 

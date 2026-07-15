@@ -1,17 +1,17 @@
 import { createClient } from "@/lib/supabase/server";
-import { createCheckoutSession } from "@/lib/stripe";
 import { logTouchpoint } from "@/lib/touchpoints";
 import { NextResponse } from "next/server";
 
 /**
  * POST /api/stripe/checkout
  *
- * Creates a Stripe Checkout Session for the signed-in user so they can unlock
- * the full affirmation library. Price comes from NEXT_PUBLIC_STRIPE_PRICE_MONTHLY.
- * Logs a `checkout_start` touchpoint. The `subscriptions` row is written by the
- * webhook once payment completes — never trust the client for access.
+ * Sends the signed-in user to the Stripe Payment Link to unlock the full
+ * library. We append `client_reference_id=<userId>` (and prefill their email)
+ * so the `checkout.session.completed` webhook can tie the payment back to this
+ * account and activate their subscription. Access is only ever granted by the
+ * webhook after Stripe confirms payment — never by the client.
  */
-export async function POST(request: Request) {
+export async function POST() {
   try {
     const supabase = await createClient();
     const {
@@ -22,41 +22,21 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const priceId =
-      process.env.NEXT_PUBLIC_STRIPE_PRICE_MONTHLY ||
-      process.env.NEXT_PUBLIC_STRIPE_PRICE_YEARLY;
-
-    if (!priceId || !process.env.STRIPE_SECRET_KEY) {
+    const paymentLink = process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK;
+    if (!paymentLink) {
       return NextResponse.json(
         { error: "Payments aren't configured yet. Please try again later." },
         { status: 503 },
       );
     }
 
-    const origin =
-      request.headers.get("origin") ?? process.env.NEXT_PUBLIC_APP_URL ?? "";
+    const url = new URL(paymentLink);
+    url.searchParams.set("client_reference_id", user.id);
+    if (user.email) url.searchParams.set("prefilled_email", user.email);
 
-    // Reuse an existing Stripe customer if we've seen this user pay before.
-    // Read through the user's own session (owner RLS permits it).
-    const { data: existing } = await supabase
-      .from("subscriptions")
-      .select("stripe_customer_id")
-      .eq("user_id", user.id)
-      .not("stripe_customer_id", "is", null)
-      .limit(1)
-      .maybeSingle();
+    await logTouchpoint("checkout_start", {}, user.id);
 
-    const session = await createCheckoutSession({
-      priceId,
-      customerId: existing?.stripe_customer_id ?? undefined,
-      userId: user.id,
-      successUrl: `${origin}/account?checkout=success`,
-      cancelUrl: `${origin}/account?checkout=canceled`,
-    });
-
-    await logTouchpoint("checkout_start", { price_id: priceId }, user.id);
-
-    return NextResponse.json({ url: session.url });
+    return NextResponse.json({ url: url.toString() });
   } catch (err) {
     console.error("[stripe/checkout]", err);
     return NextResponse.json(
