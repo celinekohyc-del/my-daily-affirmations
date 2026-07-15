@@ -1,17 +1,20 @@
 import { constructWebhookEvent } from "@/lib/stripe";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { activateSubscription, cancelSubscription } from "@/lib/subscriptions";
 import { logTouchpoint } from "@/lib/touchpoints";
 import { NextResponse } from "next/server";
 import type Stripe from "stripe";
 
+// pg needs the Node runtime (not edge).
+export const runtime = "nodejs";
+
 /**
  * POST /api/stripe/webhooks
  *
- * Verifies the Stripe signature, then activates access. Signature verification
- * happens BEFORE any DB write (Security doc requirement). Uses the service-role
- * admin client so it can write regardless of RLS.
+ * The only thing that grants paid access. The Stripe signature is verified
+ * BEFORE any DB write (Security doc requirement) — access is never granted from
+ * a client redirect.
  *
- * Register in Stripe dashboard → Webhooks → add endpoint:
+ * Register in Stripe dashboard → Developers → Webhooks → Add endpoint:
  *   <app-url>/api/stripe/webhooks
  * Events: checkout.session.completed, customer.subscription.deleted
  */
@@ -38,54 +41,36 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
   }
 
-  const supabase = createAdminClient();
-
   try {
     switch (event.type) {
-      // ── Payment completed → activate subscription ─────────────────────────
+      // ── Payment completed → activate access ───────────────────────────────
       case "checkout.session.completed": {
         const session = event.data.object as Stripe.Checkout.Session;
         // Payment Links carry the user in client_reference_id; API-created
         // sessions carry it in metadata.userId. Accept either.
         const userId =
           session.client_reference_id ?? session.metadata?.userId ?? null;
+
         if (!userId) {
           console.warn(
             "[stripe/webhooks] completed session missing client_reference_id/userId",
+            session.id,
           );
           break;
         }
 
-        // activate_subscription: upsert an active row for this user.
-        const { data: existing } = await supabase
-          .from("subscriptions")
-          .select("id")
-          .eq("user_id", userId)
-          .limit(1)
-          .maybeSingle();
-
-        const row = {
-          user_id: userId,
-          stripe_customer_id: (session.customer as string) ?? null,
-          stripe_session_id: session.id,
-          status: "active" as const,
-          started_at: new Date().toISOString(),
-        };
-
-        if (existing?.id) {
-          await supabase
-            .from("subscriptions")
-            .update(row)
-            .eq("id", existing.id);
-        } else {
-          await supabase.from("subscriptions").insert(row);
-        }
+        await activateSubscription({
+          userId,
+          stripeCustomerId: (session.customer as string) ?? null,
+          stripeSessionId: session.id,
+        });
 
         await logTouchpoint(
           "checkout_complete",
           { stripe_session_id: session.id },
           userId,
         );
+        console.log("[stripe/webhooks] activated subscription for", userId);
         break;
       }
 
@@ -93,12 +78,7 @@ export async function POST(request: Request) {
       case "customer.subscription.deleted": {
         const sub = event.data.object as Stripe.Subscription;
         const userId = sub.metadata?.userId;
-        if (userId) {
-          await supabase
-            .from("subscriptions")
-            .update({ status: "cancelled" })
-            .eq("user_id", userId);
-        }
+        if (userId) await cancelSubscription(userId);
         break;
       }
 
@@ -108,7 +88,8 @@ export async function POST(request: Request) {
     }
   } catch (err) {
     console.error(`[stripe/webhooks] error handling ${event.type}:`, err);
-    // Fall through to 200 so Stripe doesn't hammer retries on a handler bug.
+    // 500 so Stripe retries — activation is important enough to retry.
+    return NextResponse.json({ error: "Handler failed" }, { status: 500 });
   }
 
   return NextResponse.json({ received: true });
