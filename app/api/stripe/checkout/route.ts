@@ -1,5 +1,4 @@
 import { createClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/admin";
 import { createCheckoutSession } from "@/lib/stripe";
 import { logTouchpoint } from "@/lib/touchpoints";
 import { NextResponse } from "next/server";
@@ -38,8 +37,8 @@ export async function POST(request: Request) {
       request.headers.get("origin") ?? process.env.NEXT_PUBLIC_APP_URL ?? "";
 
     // Reuse an existing Stripe customer if we've seen this user pay before.
-    const admin = createAdminClient();
-    const { data: existing } = await admin
+    // Read through the user's own session (owner RLS permits it).
+    const { data: existing } = await supabase
       .from("subscriptions")
       .select("stripe_customer_id")
       .eq("user_id", user.id)

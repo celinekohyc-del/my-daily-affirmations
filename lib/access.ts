@@ -1,5 +1,4 @@
 import { createClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/admin";
 import type { User } from "@supabase/supabase-js";
 
 /** How many affirmations a free user can see per theme before the paywall. */
@@ -12,7 +11,11 @@ export type Access = {
 
 /**
  * Server-side access gate. Never trust the client: paid status is derived from
- * a `subscriptions` row with status = 'active' for the signed-in user.
+ * an `active` subscriptions row owned by the signed-in user.
+ *
+ * The read runs through the user's own authenticated session, so the
+ * owner-scoped RLS policy (auth.uid() = user_id) permits it without needing the
+ * service-role key. The webhook is the only writer of this table.
  */
 export async function getAccess(): Promise<Access> {
   try {
@@ -23,9 +26,7 @@ export async function getAccess(): Promise<Access> {
 
     if (!user) return { user: null, isPaid: false };
 
-    // Use the admin client so this check is unaffected by owner-scoped RLS.
-    const admin = createAdminClient();
-    const { data } = await admin
+    const { data } = await supabase
       .from("subscriptions")
       .select("status")
       .eq("user_id", user.id)
